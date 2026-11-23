@@ -221,7 +221,8 @@ selects a minimum overlap between 100 and 500 bp based on read N90; `-m` can
 override this (minimum 100 bp). Reads no longer than the selected overlap cannot
 contribute to the initial assembly. Repeat `--short-reads` when resuming a run.
 Short `--nano-raw` runs default to two polishing iterations; `--iterations`
-can override this.
+can override this. Use `--threads` to select the available CPUs;
+`--deterministic` runs the initial disjointig assembly on one thread.
 
 Short overlaps are less distinctive, so related strains, repeats and uneven
 coverage can result in missed sequences, fragmented assemblies or incorrect

@@ -117,13 +117,16 @@ class ShortReadAssemblyTest(unittest.TestCase):
     def test_noisy_influenza_segments(self):
         self._check_segments(short_raw=True)
 
+    def test_noisy_influenza_segments_multithreaded(self):
+        self._check_segments(short_raw=True, deterministic=False)
+
     def test_influenza_with_large_viral_genome(self):
         self._check_segments(short_raw=False, large=True)
 
     def test_uneven_segment_coverage(self):
-        self._check_segments(short_raw=False, uneven=True)
+        self._check_segments(short_raw=False, uneven=True, deterministic=False)
 
-    def _check_segments(self, short_raw, large=False, uneven=False):
+    def _check_segments(self, short_raw, large=False, uneven=False, deterministic=True):
         rng = random.Random(10923)
         refs = {header.split("|")[0]: seq.upper()
                 for header, seq in read_sequence_dict(str(REFERENCE)).items()}
@@ -173,9 +176,11 @@ class ShortReadAssemblyTest(unittest.TestCase):
 
             output = work / "assembly"
             read_mode = "--nano-raw" if short_raw else "--nano-hq"
-            subprocess.run([str(BIN / "flye"), read_mode, str(reads),
-                            "--short-reads", "--deterministic", "-t", "2",
-                            "-o", str(output)], check=True,
+            cmd = [str(BIN / "flye"), read_mode, str(reads),
+                   "--short-reads", "-t", "2", "-o", str(output)]
+            if deterministic:
+                cmd.append("--deterministic")
+            subprocess.run(cmd, check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             assembly = output / "assembly.fasta"
             paf = subprocess.check_output(

@@ -111,6 +111,11 @@ public:
 
 	size_t size() {return _size;}
 
+	T* contiguousData()
+	{
+		return _size <= ChunkSize ? _chunks.front() : nullptr;
+	}
+
 	T& operator[](size_t index)
 	{
 		const size_t chunkId = index / ChunkSize;

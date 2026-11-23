@@ -11,6 +11,7 @@
 
 #include "../common/config.h"
 #include "../common/logger.h"
+#include "../common/parallel.h"
 #include "chimera.h"
 
 
@@ -71,13 +72,11 @@ void ChimeraDetector::estimateGlobalCoverage()
 
 	int64_t sum = 0;
 	int64_t num = 0;
-	for (const auto& seq : _seqContainer.iterSeqs())
+	auto addCoverage = [&](const std::vector<int32_t>& coverage)
 	{
-		if (rand() % sampleRate) continue;
-		auto coverage = this->getReadCoverage(seq.id, _ovlpContainer.lazySeqOverlaps(seq.id));
 		bool nonZero = false;
 		for (auto c : coverage) nonZero |= (c != 0);
-		if (!nonZero) continue;
+		if (!nonZero) return;
 
 		for (size_t i = flankSize; i < coverage.size() - flankSize; ++i)
 		{
@@ -87,6 +86,37 @@ void ChimeraDetector::estimateGlobalCoverage()
 				++num;
 				covList.push_back(coverage[i]);
 			}
+		}
+	};
+
+	if (Parameters::get().shortSequences && Parameters::get().numThreads > 1)
+	{
+		std::vector<FastaRecord::Id> sampledReads;
+		for (const auto& seq : _seqContainer.iterSeqs())
+		{
+			if (rand() % sampleRate == 0) sampledReads.push_back(seq.id);
+		}
+
+		std::vector<std::vector<int32_t>> sampleCoverage(sampledReads.size());
+		std::vector<size_t> sampleIndices(sampledReads.size());
+		for (size_t i = 0; i < sampleIndices.size(); ++i) sampleIndices[i] = i;
+		std::function<void(const size_t&)> calcCoverage =
+			[this, &sampledReads, &sampleCoverage](const size_t& i)
+		{
+			auto readId = sampledReads[i];
+			sampleCoverage[i] = this->getReadCoverage(
+				readId, _ovlpContainer.lazySeqOverlaps(readId));
+		};
+		processInParallel(sampleIndices, calcCoverage, Parameters::get().numThreads, false);
+		for (const auto& coverage : sampleCoverage) addCoverage(coverage);
+	}
+	else
+	{
+		for (const auto& seq : _seqContainer.iterSeqs())
+		{
+			if (rand() % sampleRate) continue;
+			addCoverage(this->getReadCoverage(
+				seq.id, _ovlpContainer.lazySeqOverlaps(seq.id)));
 		}
 	}
 
