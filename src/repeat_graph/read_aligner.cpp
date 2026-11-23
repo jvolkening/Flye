@@ -156,7 +156,7 @@ std::vector<GraphAlignment>
 void ReadAligner::alignReads()
 {
 	static const int SMALL_ALN = 100;
-	static const int BIG_ALN = 500;
+	static const int BIG_ALN = Config::get("read_align_long_min");
 	static const int LONG_EDGE = 900;
 
 	static const float MAX_DIVERGENCE = Config::get("read_align_ovlp_divergence");

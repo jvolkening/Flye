@@ -238,7 +238,7 @@ int assemble_main(int argc, char** argv)
 	Logger::get().debug() << "Short mode: " << "NY"[shortMode];
 
 	//TODO: unify minimumOverlap ad safeOverlap concepts
-	Parameters::get().minimumOverlap = 1000;
+	if (!shortMode) Parameters::get().minimumOverlap = 1000;
 
 	SequenceContainer readsContainer;
 	std::vector<std::string> readsList = splitString(readsFasta, ',');

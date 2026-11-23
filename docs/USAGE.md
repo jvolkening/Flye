@@ -23,7 +23,7 @@ usage: flye (--pacbio-raw | --pacbio-corr | --pacbio-hifi | --nano-raw |
 	     --out-dir PATH
 
 	     [--genome-size SIZE] [--threads int] [--iterations int]
-	     [--meta] [--polish-target] [--min-overlap SIZE]
+	     [--meta] [--short-reads] [--polish-target] [--min-overlap SIZE]
 	     [--keep-haplotypes] [--debug] [--version] [--help] 
 	     [--scaffold] [--resume] [--resume-from] [--stop-after] 
 	     [--read-error float] [--extra-params]
@@ -53,7 +53,7 @@ optional arguments:
   -t int, --threads int
                         number of parallel threads [1]
   -i int, --iterations int
-                        number of polishing iterations [1]
+                        polishing iterations [1; 2 for short raw ONT]
   -m int, --min-overlap int
                         minimum overlap between reads [auto]
   --asm-coverage int    reduced coverage for initial disjointig assembly [not set]
@@ -63,6 +63,7 @@ optional arguments:
                         extra configuration parameters list (comma-separated)
   --plasmids            unused (retained for backward compatibility)
   --meta                metagenome / uneven coverage mode
+  --short-reads         experimental short ONT metagenome mode
   --keep-haplotypes     do not collapse alternative haplotypes
   --no-alt-contigs      do not output contigs representing alternative
                         haplotypes
@@ -203,6 +204,31 @@ For relatively complex single genomes, "regular" mode often outperforms metageom
 If you are using Flye / metaFlye to assemble heteroztgous bacterial genomes or metagenomes,
 you may consider using [strainy](https://github.com/katerinakazantseva/strainy) to
 call and quanitify heterozygosity and reveal collapsed strains.
+
+### Short ONT metagenomic reads
+
+The experimental `--short-reads` option enables metagenome mode and adjusts
+overlap selection, indexing, graph cleaning and polishing for short ONT reads.
+For example:
+
+```
+flye --nano-hq reads.fastq.gz --short-reads --out-dir assembly --threads 8
+```
+
+The mode is intended for read distributions around 400–800 bp. It automatically
+selects a minimum overlap between 100 and 500 bp based on read N90; `-m` can
+override this (minimum 100 bp). Reads no longer than the selected overlap cannot
+contribute to the initial assembly. Repeat `--short-reads` when resuming a run.
+Short `--nano-raw` runs default to two polishing iterations; `--iterations`
+can override this.
+
+Short overlaps are less distinctive, so related strains, repeats and uneven
+coverage can result in missed sequences, fragmented assemblies or incorrect
+joins. The usual metagenome coverage filtering still applies (contigs below 3x
+are removed after polishing). Short-read mode is experimental and has not been
+validated for high-error ONT reads or broad metagenomic datasets. It does not
+group separate segments into viral genomes or establish biological completeness.
+Inspect the assembly graph and validate candidate sequences independently.
 
 ### Haplotype mode
 

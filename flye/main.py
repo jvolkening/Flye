@@ -72,6 +72,8 @@ class Job(object):
             if (not "pipeline_version" in data or
                     data["pipeline_version"] != cfg.vals["pipeline_version"]):
                 raise ResumeException("Inconsistent pipeline version")
+            if data.get("short_reads", False) != self.args.short_reads:
+                raise ResumeException("Resume requires the same --short-reads setting")
 
             Job.run_params = data
 
@@ -321,7 +323,8 @@ class JobPolishing(Job):
         contigs, stats = \
             pol.polish(self.in_contigs, self.args.reads, self.polishing_dir,
                        self.args.num_iters, self.args.threads, self.args.platform,
-                       self.args.read_type, output_progress=True)
+                       self.args.read_type, output_progress=True,
+                       short_reads=self.args.short_reads)
         #contigs = os.path.join(self.polishing_dir, "polished_1.fasta")
         #stats = os.path.join(self.polishing_dir, "contigs_stats.txt")
         pol.filter_by_coverage(self.args, stats, contigs,
@@ -532,7 +535,7 @@ def _usage():
             "\t     --nano-corr | --nano-hq ) file1 [file_2 ...]\n"
             "\t     --out-dir PATH\n\n"
             "\t     [--genome-size SIZE] [--threads int] [--iterations int]\n"
-            "\t     [--meta] [--polish-target] [--min-overlap SIZE]\n"
+            "\t     [--meta] [--short-reads] [--polish-target] [--min-overlap SIZE]\n"
             "\t     [--keep-haplotypes] [--debug] [--version] [--help] \n"
             "\t     [--scaffold] [--resume] [--resume-from] [--stop-after] \n"
             "\t     [--read-error float] [--extra-params] \n"
@@ -619,10 +622,10 @@ def main():
                         default=1, metavar="int", help="number of parallel threads [1]")
     parser.add_argument("-i", "--iterations", dest="num_iters",
                         type=lambda v: check_int_range(v, 0, 10),
-                        default=1, help="number of polishing iterations [1]",
+                        default=None, help="number of polishing iterations [1; 2 for short raw ONT]",
                         metavar="int")
     parser.add_argument("-m", "--min-overlap", dest="min_overlap", metavar="int",
-                        type=lambda v: check_int_range(v, 1000, 10000),
+                        type=lambda v: check_int_range(v, 100, 10000),
                         default=None, help="minimum overlap between reads [auto]")
     parser.add_argument("--asm-coverage", dest="asm_coverage", metavar="int",
                         default=None, help="reduced coverage for initial "
@@ -640,6 +643,8 @@ def main():
     parser.add_argument("--meta", action="store_true",
                         dest="meta", default=False,
                         help="metagenome / uneven coverage mode")
+    parser.add_argument("--short-reads", action="store_true",
+                        help="experimental short ONT metagenome mode")
     parser.add_argument("--keep-haplotypes", action="store_true",
                         dest="keep_haplotypes", default=False,
                         help="do not collapse alternative haplotypes")
@@ -674,6 +679,18 @@ def main():
                         help="perform disjointig assembly single-threaded")
     args = parser.parse_args()
 
+    if args.num_iters is None:
+        args.num_iters = 2 if args.short_reads and args.nano_raw else 1
+
+    if args.short_reads:
+        if not (args.nano_raw or args.nano_corrected or args.nano_hq):
+            parser.error("--short-reads requires an ONT read type")
+        if args.polish_target:
+            parser.error("--short-reads is only available for assembly")
+        args.meta = True
+    elif args.min_overlap is not None and args.min_overlap < 1000:
+        parser.error("--min-overlap below 1000 requires --short-reads")
+
     if args.asm_coverage and (args.genome_size is None):
         parser.error("--asm-coverage option requires genome size estimate (--genome-size)")
 
@@ -692,6 +709,15 @@ def main():
             args.extra_params += "," + param
         else:
             args.extra_params = param
+
+    if args.short_reads:
+        defaults = ("maximum_jump=50,maximum_overhang=100,"
+                    "max_separation=100,short_tip_length=0,"
+                    "long_tip_length=0,use_minimizers=1,minimizer_window=5,"
+                    "chimera_window=50,chimera_overhang=50,read_align_long_min=100")
+        if args.nano_raw:
+            defaults += ",kmer_size=11,minimizer_window=3,maximum_jump=100"
+        args.extra_params = defaults + ("," + args.extra_params if args.extra_params else "")
 
     if args.read_error:
         hifi_str = "assemble_ovlp_divergence={0},repeat_graph_ovlp_divergence={0}".format(args.read_error)

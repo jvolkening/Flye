@@ -26,12 +26,14 @@ def setup_params(args):
     logger.info("Configuring run")
     parameters = {}
     parameters["pipeline_version"] = cfg.vals["pipeline_version"]
+    parameters["short_reads"] = args.short_reads
 
     total_length = 0
     read_lengths = []
     MAX_READ_LEN = 2 ** 31 - 1
 
-    lowest_read_len = cfg.vals["min_overlap_range"][args.read_type][0]
+    lowest_read_len = (100 if args.short_reads
+                       else cfg.vals["min_overlap_range"][args.read_type][0])
     if args.min_overlap:
         lowest_read_len = args.min_overlap
     passing_reads = 0
@@ -68,14 +70,16 @@ def setup_params(args):
 
     logger.info("Reads N50/N90: %d / %d", reads_n50, reads_n90)
     if args.min_overlap is None:
-        GRADE = 1000
-        int_min_ovlp = int(round(reads_n90 / GRADE)) * GRADE
-
-        MIN_OVLP = cfg.vals["min_overlap_range"][args.read_type][0]
-        MAX_OVLP = cfg.vals["min_overlap_range"][args.read_type][1]
-        if args.meta:
-            MAX_OVLP = min(MAX_OVLP, cfg.vals["max_meta_overlap"])
-        parameters["min_overlap"] = max(MIN_OVLP, min(MAX_OVLP, int_min_ovlp))
+        if args.short_reads:
+            parameters["min_overlap"] = max(100, min(500, reads_n90 // 3))
+        else:
+            GRADE = 1000
+            int_min_ovlp = int(round(reads_n90 / GRADE)) * GRADE
+            MIN_OVLP = cfg.vals["min_overlap_range"][args.read_type][0]
+            MAX_OVLP = cfg.vals["min_overlap_range"][args.read_type][1]
+            if args.meta:
+                MAX_OVLP = min(MAX_OVLP, cfg.vals["max_meta_overlap"])
+            parameters["min_overlap"] = max(MIN_OVLP, min(MAX_OVLP, int_min_ovlp))
         logger.info("Minimum overlap set to %d", parameters["min_overlap"])
     else:
         parameters["min_overlap"] = args.min_overlap

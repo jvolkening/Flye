@@ -50,7 +50,7 @@ def check_binaries():
 
 
 def polish(contig_seqs, read_seqs, work_dir, num_iters, num_threads, read_platform,
-           read_type, output_progress):
+           read_type, output_progress, short_reads=False):
     """
     High-level polisher interface
     """
@@ -93,7 +93,7 @@ def polish(contig_seqs, read_seqs, work_dir, num_iters, num_threads, read_platfo
         coverage_stats, mean_aln_error = \
             make_bubbles(alignment_file, contigs_info, prev_assembly,
                          read_platform, num_threads,
-                         bubbles_file)
+                         bubbles_file, short_reads=short_reads)
 
         logger.info("Alignment error rate: %f", mean_aln_error)
         consensus_out = os.path.join(work_dir, "consensus_{0}.fasta".format(i + 1))

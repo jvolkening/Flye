@@ -55,7 +55,7 @@ class Bubble(object):
 
 def _thread_worker(aln_reader, chunk_feeder, contigs_info, err_mode,
                    results_queue, error_queue, bubbles_file,
-                   bubbles_file_lock):
+                   bubbles_file_lock, short_reads):
     """
     Will run in parallel
     """
@@ -76,7 +76,7 @@ def _thread_worker(aln_reader, chunk_feeder, contigs_info, err_mode,
             ctg_aln = aln_reader.trim_and_transpose(ctg_aln, ctg_region.start, ctg_region.end)
             ctg_aln, mean_cov = get_uniform_alignments(ctg_aln)
 
-            profile, aln_errors = _compute_profile(ctg_aln, ref_seq)
+            profile, aln_errors = _compute_profile(ctg_aln, ref_seq, short_reads)
             partition, num_long_bubbles = _get_partition(profile, err_mode)
             ctg_bubbles = _get_bubble_seqs(ctg_aln, profile, partition, ctg_id)
 
@@ -116,7 +116,7 @@ def _thread_worker(aln_reader, chunk_feeder, contigs_info, err_mode,
 
 
 def make_bubbles(alignment_path, contigs_info, contigs_path,
-                 err_mode, num_proc, bubbles_out):
+                 err_mode, num_proc, bubbles_out, short_reads=False):
     """
     The main function: takes an alignment and returns bubbles
     """
@@ -134,14 +134,15 @@ def make_bubbles(alignment_path, contigs_info, contigs_path,
         bubbles_out_lock = multiprocessing.Lock()
 
         process_in_parallel(_thread_worker, (aln_reader, chunk_feeder, contigs_info, err_mode,
-                         results_queue, error_queue, bubbles_out, bubbles_out_lock), num_proc)
+                         results_queue, error_queue, bubbles_out, bubbles_out_lock,
+                         short_reads), num_proc)
     else:
         results_queue = Queue()
         error_queue = Queue()
         bubbles_out_lock = None
 
         _thread_worker(aln_reader, chunk_feeder, contigs_info, err_mode,
-                results_queue, error_queue, bubbles_out, bubbles_out_lock)
+                results_queue, error_queue, bubbles_out, bubbles_out_lock, short_reads)
         
     if not error_queue.empty():
         raise error_queue.get()
@@ -332,7 +333,7 @@ def _is_simple_kmer(profile, position):
     return True
 
 
-def _compute_profile(alignment, ref_sequence):
+def _compute_profile(alignment, ref_sequence, short_reads=False):
     """
     Computes alignment profile
     """
@@ -341,7 +342,8 @@ def _compute_profile(alignment, ref_sequence):
     genome_len = alignment[0].trg_len
 
     #max_aln_err = cfg.vals["err_modes"][platform]["max_aln_error"]
-    min_aln_len = min(cfg.vals["min_polish_aln_len"], genome_len // 2)
+    min_aln_len = min(100 if short_reads else cfg.vals["min_polish_aln_len"],
+                      genome_len // 2)
     aln_errors = []
     #filtered = 0
     profile = [ProfileInfo() for _ in range(genome_len)]
