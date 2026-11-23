@@ -67,6 +67,50 @@ class ShortReadParametersTest(unittest.TestCase):
                      (BIN / "flye-minimap2").exists() and
                      (BIN / "flye-samtools").exists(), "Flye binaries not built")
 class ShortReadAssemblyTest(unittest.TestCase):
+    def test_short_reads_stitch_without_artificial_duplication(self):
+        rng = random.Random(88029)
+        reference = "".join(rng.choices("ACGT", k=30000))
+        rng = random.Random(32947)
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            ref_file = work / "reference.fasta"
+            ref_file.write_text(">target\n" + reference + "\n")
+            reads = work / "reads.fasta"
+            with reads.open("w") as out:
+                for i in range(5000):
+                    length = rng.randint(400, 800)
+                    start = rng.randint(0, len(reference) - length)
+                    bases = []
+                    for base in reference[start:start + length]:
+                        chance = rng.random()
+                        if chance < 0.003:
+                            continue
+                        if chance < 0.006:
+                            bases.append(rng.choice("ACGT"))
+                        if chance < 0.016:
+                            base = rng.choice([b for b in "ACGT" if b != base])
+                        bases.append(base)
+                    read = "".join(bases)
+                    if rng.randrange(2):
+                        read = read.translate(str.maketrans("ACGT", "TGCA"))[::-1]
+                    out.write(">{}\n{}\n".format(i, read))
+
+            output = work / "assembly"
+            subprocess.run([str(BIN / "flye"), "--nano-hq", str(reads),
+                            "--short-reads", "--deterministic", "-t", "2",
+                            "-o", str(output)], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            paf = subprocess.check_output(
+                [str(BIN / "flye-minimap2"), "-x", "asm5", "-c",
+                 "--secondary=no", str(ref_file), str(output / "assembly.fasta")],
+                stderr=subprocess.DEVNULL, text=True)
+            hits = [line.split("\t") for line in paf.splitlines()]
+            self.assertEqual(len(hits), 1)
+            hit = hits[0]
+            self.assertGreaterEqual((int(hit[8]) - int(hit[7])) / len(reference), 0.98)
+            self.assertGreaterEqual(int(hit[9]) / int(hit[10]), 0.99)
+            self.assertLessEqual(int(hit[1]), int(len(reference) * 1.02))
+
     def test_influenza_segments_and_microbial_background(self):
         self._check_segments(short_raw=False)
 
@@ -135,7 +179,7 @@ class ShortReadAssemblyTest(unittest.TestCase):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             assembly = output / "assembly.fasta"
             paf = subprocess.check_output(
-                [str(BIN / "flye-minimap2"), "-x", "asm5", "--secondary=yes",
+                [str(BIN / "flye-minimap2"), "-x", "asm5", "-c", "--secondary=yes",
                  str(assembly), str(ref_file)], stderr=subprocess.DEVNULL, text=True)
             hits = collections.defaultdict(list)
             for line in paf.splitlines():
@@ -152,7 +196,7 @@ class ShortReadAssemblyTest(unittest.TestCase):
                 self.assertGreaterEqual(covered / len(seq), min_coverage, name)
 
             paf = subprocess.check_output(
-                [str(BIN / "flye-minimap2"), "-x", "asm5", "--secondary=yes",
+                [str(BIN / "flye-minimap2"), "-x", "asm5", "-c", "--secondary=yes",
                  str(ref_file), str(assembly)], stderr=subprocess.DEVNULL, text=True)
             contig_refs = collections.defaultdict(set)
             for line in paf.splitlines():

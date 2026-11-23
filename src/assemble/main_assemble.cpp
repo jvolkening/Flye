@@ -311,7 +311,8 @@ int assemble_main(int argc, char** argv)
 	extender.assembleDisjointigs();
 	vertexIndex.clear();
 
-	ConsensusGenerator consGen;
+	// Short reads may not contain 500 bases between successive overlap switches.
+	ConsensusGenerator consGen(shortMode ? 0 : 500);
 	auto disjointigsFasta = 
 		consGen.generateConsensuses(extender.getDisjointigPaths());
 	//if (Parameters::get().shortSequences)

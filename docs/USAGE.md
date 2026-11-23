@@ -208,7 +208,8 @@ call and quanitify heterozygosity and reveal collapsed strains.
 ### Short ONT metagenomic reads
 
 The experimental `--short-reads` option enables metagenome mode and adjusts
-overlap selection, indexing, graph cleaning and polishing for short ONT reads.
+overlap selection, indexing, read stitching, graph cleaning and polishing for
+short ONT reads.
 For example:
 
 ```

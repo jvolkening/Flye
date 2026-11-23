@@ -26,11 +26,15 @@ struct ContigPath
 class ConsensusGenerator
 {
 public:
+	explicit ConsensusGenerator(int32_t minSegment = 500): _minSegment(minSegment) {}
+
 	std::vector<FastaRecord> 
 		generateConsensuses(const std::vector<ContigPath>& contigs, 
 							bool verbose = true);
 	
 private:
+	const int32_t _minSegment;
+
 	struct AlignmentInfo
 	{
 		std::string alnOne;

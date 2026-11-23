@@ -166,7 +166,6 @@ std::pair<int32_t, int32_t>
 ConsensusGenerator::getSwitchPositions(const AlignmentInfo& aln,
 									   int32_t prevSwitch)
 {
-	const int MIN_SEGMENT = 500;
 	const int MIN_MATCH = 15;
 
 	int leftPos = aln.startOne;
@@ -178,7 +177,7 @@ ConsensusGenerator::getSwitchPositions(const AlignmentInfo& aln,
 		if (aln.alnTwo[i] != '-') ++rightPos;
 
 		if (aln.alnOne[i] != '-' && aln.alnTwo[i] != '-' &&
-			leftPos > prevSwitch + MIN_SEGMENT)
+			leftPos > prevSwitch + _minSegment)
 		{
 			++matchRun;
 		}
