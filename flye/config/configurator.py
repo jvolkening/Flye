@@ -27,6 +27,7 @@ def setup_params(args):
     parameters = {}
     parameters["pipeline_version"] = cfg.vals["pipeline_version"]
     parameters["short_reads"] = args.short_reads
+    parameters["extend_ends"] = getattr(args, "extend_ends", False)
 
     total_length = 0
     read_lengths = []

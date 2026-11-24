@@ -224,6 +224,26 @@ Short `--nano-raw` runs default to two polishing iterations; `--iterations`
 can override this. Use `--threads` to select the available CPUs;
 `--deterministic` runs the initial disjointig assembly on one thread.
 
+The optional `--extend-ends` adds an experimental post-assembly read-mapping
+step. It writes candidate extensions to `assembly.extended.fasta` and a
+per-end report to `assembly.end_extensions.tsv`; `assembly.fasta`, graph files
+and `assembly_info.txt` remain unchanged and describe the original assembly.
+This option requires `--short-reads`, cannot be combined with `--scaffold`,
+and must also be specified when resuming the run.
+
+The extension uses uniquely mapped reads anchored at each end, requiring at
+least four distinct read names and 80% agreement for each consensus call.
+It stops at weak or conflicting support, extends at most 200 bases per end,
+and checks candidate extensions against the existing assembly to limit
+duplication, including overlaps between candidate extensions. It skips
+circular, repeat and alternative contigs and ends with more than 500 candidate
+reads. Short overlaps may still be duplicated, and it cannot recover unsequenced
+bases. Reads should be adapter- and primer-trimmed: shared library artifacts,
+PCR duplicates, related strains and misleading mappings can still produce
+incorrect extensions, even with multiple supporting reads. Inspect the report
+and validate candidates independently. The extra mapping and consensus step
+increases runtime and memory use.
+
 Short overlaps are less distinctive, so related strains, repeats and uneven
 coverage can result in missed sequences, fragmented assemblies or incorrect
 joins. The usual metagenome coverage filtering still applies (contigs below 3x

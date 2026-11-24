@@ -22,6 +22,7 @@ import flye.polishing.consensus as cons
 import flye.assembly.assemble as asm
 import flye.assembly.repeat_graph as repeat
 import flye.assembly.scaffolder as scf
+import flye.assembly.end_extension as end_extension
 from flye.__version__ import __version__
 from flye.__build__ import __build__
 import flye.config.py_cfg as cfg
@@ -74,6 +75,8 @@ class Job(object):
                 raise ResumeException("Inconsistent pipeline version")
             if data.get("short_reads", False) != self.args.short_reads:
                 raise ResumeException("Resume requires the same --short-reads setting")
+            if data.get("extend_ends", False) != getattr(self.args, "extend_ends", False):
+                raise ResumeException("Resume requires the same --extend-ends setting")
 
             Job.run_params = data
 
@@ -263,6 +266,25 @@ class JobFinalize(Job):
         logger.info("Final assembly: %s", self.out_files["assembly"])
 
 
+class JobEndExtension(Job):
+    def __init__(self, args, work_dir, assembly, info):
+        super(JobEndExtension, self).__init__()
+        self.args = args
+        self.work_dir = work_dir
+        self.name = "extend"
+        self.assembly = assembly
+        self.info = info
+        self.out_files["assembly"] = os.path.join(work_dir, "assembly.extended.fasta")
+        self.out_files["report"] = os.path.join(work_dir, "assembly.end_extensions.tsv")
+
+    def run(self):
+        super(JobEndExtension, self).run()
+        end_extension.extend_ends(self.assembly, self.info, self.args.reads,
+                                  self.args.threads, self.out_files["assembly"],
+                                  self.out_files["report"], self.work_dir)
+        logger.info("Experimental extended assembly: %s", self.out_files["assembly"])
+
+
 class JobConsensus(Job):
     def __init__(self, args, work_dir, in_contigs):
         super(JobConsensus, self).__init__()
@@ -398,6 +420,9 @@ def _create_job_list(args, work_dir, log_file):
     jobs.append(JobFinalize(args, work_dir, log_file, contigs_file,
                             graph_file, repeat_stats, polished_stats,
                             polished_gfa, scaffold_links))
+    if args.extend_ends:
+        jobs.append(JobEndExtension(args, work_dir, jobs[-1].out_files["assembly"],
+                                    jobs[-1].out_files["stats"]))
 
     return jobs
 
@@ -535,7 +560,7 @@ def _usage():
             "\t     --nano-corr | --nano-hq ) file1 [file_2 ...]\n"
             "\t     --out-dir PATH\n\n"
             "\t     [--genome-size SIZE] [--threads int] [--iterations int]\n"
-            "\t     [--meta] [--short-reads] [--polish-target] [--min-overlap SIZE]\n"
+            "\t     [--meta] [--short-reads] [--extend-ends] [--polish-target] [--min-overlap SIZE]\n"
             "\t     [--keep-haplotypes] [--debug] [--version] [--help] \n"
             "\t     [--scaffold] [--resume] [--resume-from] [--stop-after] \n"
             "\t     [--read-error float] [--extra-params] \n"
@@ -645,6 +670,8 @@ def main():
                         help="metagenome / uneven coverage mode")
     parser.add_argument("--short-reads", action="store_true",
                         help="experimental short ONT metagenome mode")
+    parser.add_argument("--extend-ends", action="store_true",
+                        help="write experimental read-supported contig end extensions")
     parser.add_argument("--keep-haplotypes", action="store_true",
                         dest="keep_haplotypes", default=False,
                         help="do not collapse alternative haplotypes")
@@ -690,6 +717,10 @@ def main():
         args.meta = True
     elif args.min_overlap is not None and args.min_overlap < 1000:
         parser.error("--min-overlap below 1000 requires --short-reads")
+    if args.extend_ends and not args.short_reads:
+        parser.error("--extend-ends requires --short-reads")
+    if args.extend_ends and args.scaffold:
+        parser.error("--extend-ends is incompatible with --scaffold")
 
     if args.asm_coverage and (args.genome_size is None):
         parser.error("--asm-coverage option requires genome size estimate (--genome-size)")
