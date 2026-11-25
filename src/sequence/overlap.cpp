@@ -229,12 +229,76 @@ OverlapDetector::getSeqOverlaps(const FastaRecord& fastaRec,
 								(std::chrono::system_clock::now() - timeStart).count();
 	timeStart = std::chrono::system_clock::now();
 
+	struct Candidate
+	{
+		size_t begin;
+		size_t uniqueMatches;
+		FastaRecord::Id id;
+	};
+	std::vector<size_t> selectedCandidates;
+	if (_maxCandidatesPerSide)
+	{
+		std::vector<Candidate> sides[2];
+		for (size_t begin = 0; begin < vecMatches.size(); )
+		{
+			size_t end = begin;
+			size_t unique = 0;
+			int32_t previous = -1;
+			int32_t minExt = std::numeric_limits<int32_t>::max();
+			int32_t maxExt = std::numeric_limits<int32_t>::min();
+			while (end < vecMatches.size() && vecMatches[end].extId == vecMatches[begin].extId)
+			{
+				const auto& match = vecMatches[end];
+				if (match.curPos != previous) { ++unique; previous = match.curPos; }
+				minExt = std::min(minExt, match.extPos);
+				maxExt = std::max(maxExt, match.extPos);
+				++end;
+			}
+			const auto id = vecMatches[begin].extId;
+			if (id == fastaRec.id || id == fastaRec.id.rc())
+				selectedCandidates.push_back(begin);
+			else if (unique >= minKmerSruvivalRate * _minOverlap &&
+					 vecMatches[end - 1].curPos - vecMatches[begin].curPos >= _minOverlap &&
+					 maxExt - minExt >= _minOverlap)
+			{
+				int64_t shift = (int64_t)vecMatches[begin].curPos +
+								vecMatches[end - 1].curPos - minExt - maxExt;
+				sides[shift >= 0].push_back({begin, unique, id});
+			}
+			begin = end;
+		}
+		size_t eligible = 0;
+		size_t selected = 0;
+		for (auto& side : sides)
+		{
+			eligible += side.size();
+			auto better = [](const Candidate& a, const Candidate& b)
+			{
+				if (a.uniqueMatches != b.uniqueMatches) return a.uniqueMatches > b.uniqueMatches;
+				return a.id.hash() < b.id.hash();
+			};
+			if (side.size() > _maxCandidatesPerSide)
+			{
+				std::nth_element(side.begin(), side.begin() + _maxCandidatesPerSide,
+								 side.end(), better);
+				side.resize(_maxCandidatesPerSide);
+			}
+			selected += side.size();
+			for (const auto& candidate : side) selectedCandidates.push_back(candidate.begin);
+		}
+		_candidatesEligible.fetch_add(eligible, std::memory_order_relaxed);
+		_candidatesSelected.fetch_add(selected, std::memory_order_relaxed);
+		_candidateQueries.fetch_add(1, std::memory_order_relaxed);
+		std::sort(selectedCandidates.begin(), selectedCandidates.end());
+	}
+
 	const int STAT_WND = 10000;
 	std::vector<OverlapRange> divStatWindows(curLen / STAT_WND + 1);
 
 	std::vector<OverlapRange> detectedOverlaps;
 	size_t extRangeBegin = 0;
 	size_t extRangeEnd = 0;
+	size_t selectedIndex = 0;
 	while(extRangeEnd < vecMatches.size())
 	{
 		if (maxOverlaps != 0 &&
@@ -253,6 +317,13 @@ OverlapDetector::getSeqOverlaps(const FastaRecord& fastaRec,
 				prevPos = vecMatches[extRangeEnd].curPos;
 			}
 			++extRangeEnd;
+		}
+		if (_maxCandidatesPerSide)
+		{
+			while (selectedIndex < selectedCandidates.size() &&
+				   selectedCandidates[selectedIndex] < extRangeBegin) ++selectedIndex;
+			if (selectedIndex == selectedCandidates.size() ||
+				selectedCandidates[selectedIndex] != extRangeBegin) continue;
 		}
 		if (uniqueMatches < minKmerSruvivalRate * _minOverlap) continue;
 

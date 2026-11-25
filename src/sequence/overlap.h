@@ -316,11 +316,16 @@ public:
 					int maxJump, int minOverlap, int maxOverhang,
 					bool keepAlignment, bool onlyMaxExt,
 					float maxDivergence, bool nuclAlignment,
-					bool partitionBadMappings, bool useHpc):
+					bool partitionBadMappings, bool useHpc,
+					size_t maxCandidatesPerSide = 0):
 		_maxJump(maxJump),
 		_minOverlap(minOverlap),
 		_maxOverhang(maxOverhang),
 		_maxCurOverlaps(0),	//no max overlaps
+		_maxCandidatesPerSide(maxCandidatesPerSide),
+		_candidatesEligible(0),
+		_candidatesSelected(0),
+		_candidateQueries(0),
 		_checkOverhang(maxOverhang > 0),
 		_keepAlignment(keepAlignment),
 		_onlyMaxExt(onlyMaxExt),
@@ -333,6 +338,15 @@ public:
 		_vertexIndex(vertexIndex),
 		_seqContainer(seqContainer)
 	{
+	}
+
+	void logCandidateStats() const
+	{
+		if (_maxCandidatesPerSide)
+			Logger::get().info() << "Short-read overlap candidates selected: "
+								 << _candidatesSelected.load() << " of "
+								 << _candidatesEligible.load() << " across "
+								 << _candidateQueries.load() << " queries";
 	}
 
 	friend class OverlapContainer;
@@ -350,6 +364,10 @@ private:
 	const int   _minOverlap;
 	const int   _maxOverhang;
 	const int   _maxCurOverlaps;
+	const size_t _maxCandidatesPerSide;
+	mutable std::atomic<size_t> _candidatesEligible;
+	mutable std::atomic<size_t> _candidatesSelected;
+	mutable std::atomic<size_t> _candidateQueries;
 	const bool  _checkOverhang;
 	const bool  _keepAlignment;
 	const bool  _onlyMaxExt;

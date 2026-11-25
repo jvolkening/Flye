@@ -5,6 +5,8 @@
 #pragma once
 
 #include <unistd.h>
+#include <cerrno>
+#include <cstdlib>
 #include <unordered_map>
 #include <fstream>
 #include "logger.h"
@@ -66,7 +68,7 @@ public:
 			}
 			std::string key = trimString(tokens[0]);
 			std::string value = trimString(tokens[1]);
-			Config::instance()._parameters[key] = std::atof(value.c_str());
+			Config::instance()._parameters[key] = parseValue(key, value);
 			Logger::get().debug() << "\t" << key << "=" << value;
 		}
 	}
@@ -90,12 +92,27 @@ public:
 			auto keyVal = splitString(param, '=');
 			std::string key = trimString(keyVal[0]);
 			std::string value = trimString(keyVal[1]);
-			Config::instance()._parameters[key] = std::atof(value.c_str());
+			Config::instance()._parameters[key] = parseValue(key, value);
 			Logger::get().debug() << "\t" << key << "=" << value;
 		}
 	}
 
 private:
+	static float parseValue(const std::string& key, const std::string& value)
+	{
+		if (key != "short_repeat_median_rate" &&
+			key != "short_downsample_coverage" &&
+			key != "short_max_candidates_per_side")
+			return std::atof(value.c_str());
+
+		char* end = nullptr;
+		errno = 0;
+		float result = std::strtof(value.c_str(), &end);
+		if (end == value.c_str() || *end != '\0' || errno == ERANGE)
+			throw std::runtime_error("Invalid numeric value for " + key + ": " + value);
+		return result;
+	}
+
 	Config(){}
 	std::unordered_map<std::string, float> _parameters;
 };

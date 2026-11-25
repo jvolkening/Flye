@@ -2,6 +2,7 @@ import collections
 import json
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -126,7 +127,47 @@ class ShortReadAssemblyTest(unittest.TestCase):
     def test_uneven_segment_coverage(self):
         self._check_segments(short_raw=False, uneven=True, deterministic=False)
 
-    def _check_segments(self, short_raw, large=False, uneven=False, deterministic=True):
+    def test_short_read_performance_controls(self):
+        self._check_segments(short_raw=False, uneven=True, performance=True)
+
+    def test_subsampling_keeps_low_coverage_reads(self):
+        self._check_segments(short_raw=False, uneven=True, performance="retain_all")
+
+    def test_raw_subsampling_uses_distinctive_kmers(self):
+        self._check_segments(short_raw=True, performance="retain_all")
+
+    def test_raw_solid_kmer_median_filter(self):
+        self._check_segments(short_raw=True, performance="raw_median")
+
+    def test_invalid_performance_controls(self):
+        config = ROOT / "flye/config/bin_cfg/asm_nano_hq.cfg"
+        for extra in ("short_max_candidates_per_side=-1",
+                      "short_max_candidates_per_side=1.5",
+                      "short_repeat_median_rate=0.5",
+                      "short_downsample_coverage=-1"):
+            result = subprocess.run(
+                [str(BIN / "flye-modules"), "assemble", "--reads", "unused.fasta",
+                 "--out-asm", "unused.fasta", "--config", str(config), "--short",
+                 "--extra-params", extra], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid short-read performance parameters", result.stderr)
+        result = subprocess.run(
+            [str(BIN / "flye-modules"), "assemble", "--reads", "unused.fasta",
+             "--out-asm", "unused.fasta", "--config", str(config),
+             "--extra-params", "short_downsample_coverage=50"],
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("require --short", result.stderr)
+        result = subprocess.run(
+            [str(BIN / "flye-modules"), "assemble", "--reads", "unused.fasta",
+             "--out-asm", "unused.fasta", "--config", str(config), "--short",
+             "--extra-params", "short_downsample_coverage=invalid"],
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Invalid numeric value for short_downsample_coverage", result.stderr)
+
+    def _check_segments(self, short_raw, large=False, uneven=False, deterministic=True,
+                        performance=False):
         rng = random.Random(10923)
         refs = {header.split("|")[0]: seq.upper()
                 for header, seq in read_sequence_dict(str(REFERENCE)).items()}
@@ -180,8 +221,37 @@ class ShortReadAssemblyTest(unittest.TestCase):
                    "--short-reads", "-t", "2", "-o", str(output)]
             if deterministic:
                 cmd.append("--deterministic")
+            if performance is True:
+                cmd.extend(["--extra-params",
+                            "repeat_kmer_rate=1000,short_repeat_median_rate=20,"
+                            "short_downsample_coverage=10,short_max_candidates_per_side=8"])
+            elif performance == "retain_all":
+                cmd.extend(["--extra-params", "short_downsample_coverage=10000"])
+            elif performance == "raw_median":
+                cmd.extend(["--extra-params", "use_minimizers=0,repeat_kmer_rate=1000,"
+                            "short_repeat_median_rate=1000"])
             subprocess.run(cmd, check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if performance:
+                log = (output / "flye.log").read_text()
+                if performance == "raw_median":
+                    self.assertIn("Solid indexed k-mer median frequency:", log)
+                else:
+                    self.assertIn("Subsampling estimate k-mer size: 17", log)
+                    retained = re.search(r"Short-read subsampling retained (\d+) of (\d+) reads", log)
+                    self.assertIsNotNone(retained)
+                if performance is True:
+                    repeat = re.search(r"Solid indexed k-mer median frequency: (\d+); repeat cutoff: (\d+)", log)
+                    self.assertIsNotNone(repeat)
+                    self.assertLessEqual(int(repeat[2]), 20 * int(repeat[1]))
+                    self.assertLess(int(retained[1]), int(retained[2]))
+                    candidates = re.search(
+                        r"Short-read overlap candidates selected: (\d+) of (\d+) across (\d+) queries", log)
+                    self.assertIsNotNone(candidates)
+                    self.assertLess(int(candidates[1]), int(candidates[2]))
+                    self.assertLessEqual(int(candidates[1]), 16 * int(candidates[3]))
+                elif performance == "retain_all":
+                    self.assertEqual(int(retained[1]), int(retained[2]))
             assembly = output / "assembly.fasta"
             paf = subprocess.check_output(
                 [str(BIN / "flye-minimap2"), "-x", "asm5", "-c", "--secondary=yes",

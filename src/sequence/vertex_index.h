@@ -213,8 +213,8 @@ public:
 	void countKmers();
 	void buildIndex(int minCoverage);
 	void buildIndexUnevenCoverage(int minCoverage, float selectRate, 
-								  int tandemFreq);
-	void buildIndexMinimizers(int minCoverage, int wndLen);
+								  int tandemFreq, float medianRate = 0);
+	void buildIndexMinimizers(int minCoverage, int wndLen, float medianRate = 0);
 	void clear();
 
 	IterHelper iterKmerPos(Kmer kmer) const
@@ -286,7 +286,7 @@ private:
 						   float selctRate, int tandemFreq);
 
 	void allocateIndexMemory();
-	void filterFrequentKmers(int minCoverage, float rate);
+	void filterFrequentKmers(int minCoverage, float rate, float medianRate = 0);
 
 	const SequenceContainer& _seqContainer;
 	//KmerDistribution 		 _kmerDistribution;
