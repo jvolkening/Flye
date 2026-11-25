@@ -224,6 +224,43 @@ Short `--nano-raw` runs default to two polishing iterations; `--iterations`
 can override this. Use `--threads` to select the available CPUs;
 `--deterministic` runs the initial disjointig assembly on one thread.
 
+For high-coverage datasets, three experimental, **opt-in** controls can reduce
+work in initial disjointig assembly:
+
+```
+--extra-params repeat_kmer_rate=1000,short_downsample_coverage=50,short_max_candidates_per_side=50
+```
+
+These are starting points for evaluation, not validated defaults. Zero disables
+each control. `short_repeat_median_rate` (zero or at least one), which is not
+enabled in the example, limits the
+existing repeat cutoff to this multiple of the median occurrence count of
+indexed k-mers occurring at least twice. This is a global statistic, not a
+per-species coverage estimate; abundant genomes may lose most of their seeds
+or disappear from the assembly. No multiplier is known to be safe in general.
+It is combined with `repeat_kmer_rate` by taking the lower cutoff.
+
+`short_downsample_coverage` estimates each read's coverage from the median
+occurrence count of sampled indexed minimizers (window 10, k-mer size at least
+17) and retains high-coverage reads
+probabilistically toward the specified target. Reads with insufficient evidence
+are retained. The target is approximate, not a guaranteed coverage cap; repeats,
+sequencing errors, minimizer selection and uneven coverage can bias estimates.
+The extra indexing pass and retained-read copy consume time and memory, and the
+original reads are still used in subsequent pipeline stages.
+
+`short_max_candidates_per_side` is an integer limit on candidate reads selected
+per estimated extension direction before chaining. Candidates are ranked by
+distinct matching query positions; self matches are exempt. This does not cap
+the initial seed-hit collection and sorting, and estimates of direction and
+seed support can be wrong. The log reports retained reads, repeat cutoff and
+candidate counts when the corresponding controls are enabled.
+
+All three controls can discard real overlaps, rare taxa, repeats or strain
+variation and can cause fragmentation or incorrect joins. Compare each setting
+separately against an unrestricted run, including rare-taxon recovery and
+assembly accuracy, before relying on it. None guarantees a runtime reduction.
+
 The optional `--extend-ends` adds an experimental post-assembly read-mapping
 step. It writes candidate extensions to `assembly.extended.fasta` and a
 per-end report to `assembly.end_extensions.tsv`; `assembly.fasta`, graph files

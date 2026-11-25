@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <cmath>
+#include <limits>
+#include <memory>
+#include <numeric>
 #include <execinfo.h>
 
 #include "../sequence/vertex_index.h"
@@ -17,10 +20,81 @@
 #include "../assemble/extender.h"
 #include "../assemble/parameters_estimator.h"
 #include "../common/logger.h"
+#include "../common/parallel.h"
 #include "../common/utils.h"
 #include "../common/memory_info.h"
 
 #include <getopt.h>
+
+std::unique_ptr<SequenceContainer> downsampleShortReads(
+	const SequenceContainer& reads, float targetCoverage)
+{
+	Logger::get().info() << "Estimating short-read coverage for subsampling";
+	std::vector<FastaRecord::Id> retained;
+	std::vector<FastaRecord::Id> allReads;
+	for (const auto& read : reads.iterSeqs())
+		if (read.id.strand()) allReads.push_back(read.id);
+	const size_t total = allReads.size();
+	{
+		struct KmerSizeGuard
+		{
+			size_t original;
+			KmerSizeGuard(): original(Parameters::get().kmerSize)
+			{
+				Parameters::get().kmerSize = std::max<size_t>(17, original);
+			}
+			~KmerSizeGuard() { Parameters::get().kmerSize = original; }
+		} kmerSizeGuard;
+		Logger::get().info() << "Subsampling estimate k-mer size: "
+							 << Parameters::get().kmerSize;
+		VertexIndex estimateIndex(reads);
+		estimateIndex.outputProgress(true);
+		estimateIndex.buildIndexMinimizers(1, 10);
+		std::vector<uint8_t> keep(total, 0);
+		std::vector<size_t> indices(total);
+		std::iota(indices.begin(), indices.end(), 0);
+		std::function<void(const size_t&)> estimateRead = [&](const size_t& i)
+		{
+			const auto& read = reads.getRecord(allReads[i]);
+			std::vector<size_t> frequencies;
+			for (const auto& pos : IterKmers(read.sequence))
+			{
+				if (pos.position % 10) continue;
+				Kmer kmer = pos.kmer;
+				kmer.standardForm();
+				size_t frequency = estimateIndex.kmerFreq(kmer);
+				if (frequency >= 2) frequencies.push_back(frequency);
+			}
+			float coverage = 0;
+			if (frequencies.size() >= 5)
+			{
+				auto mid = frequencies.begin() + frequencies.size() / 2;
+				std::nth_element(frequencies.begin(), mid, frequencies.end());
+				coverage = *mid;
+			}
+			long double draw = (long double)read.id.hash() /
+							   (long double)std::numeric_limits<size_t>::max();
+			keep[i] = coverage <= targetCoverage || draw < targetCoverage / coverage;
+		};
+		processInParallel(indices, estimateRead, Parameters::get().numThreads, true);
+		for (size_t i = 0; i < total; ++i)
+			if (keep[i]) retained.push_back(allReads[i]);
+	}
+	Logger::get().info() << "Short-read subsampling retained " << retained.size()
+						 << " of " << total << " reads (estimated target "
+						 << targetCoverage << "x)";
+	if (retained.empty()) throw std::runtime_error("Short-read subsampling removed all reads");
+	if (retained.size() == total) return nullptr;
+
+	std::unique_ptr<SequenceContainer> sampled(new SequenceContainer);
+	for (const auto& id : retained)
+	{
+		const auto& read = reads.getRecord(id);
+		sampled->addSequence(read.sequence, read.description.substr(1));
+	}
+	sampled->buildPositionIndex();
+	return sampled;
+}
 
 bool parseArgs(int argc, char** argv, std::string& readsFasta, 
 			   std::string& outAssembly, std::string& logFile, size_t& genomeSize,
@@ -220,8 +294,16 @@ int assemble_main(int argc, char** argv)
 		<< getFreeMemorySize() / 1024 / 1024 / 1024 << " Gb";
 	Logger::get().debug() << "Total CPUs: " << std::thread::hardware_concurrency();
 
-	Config::load(configPath);
-	if (!extraParams.empty()) Config::addParameters(extraParams);
+	try
+	{
+		Config::load(configPath);
+		if (!extraParams.empty()) Config::addParameters(extraParams);
+	}
+	catch (const std::exception& e)
+	{
+		Logger::get().error() << e.what();
+		return 1;
+	}
 	if (kmerSize == -1)
 	{
 		kmerSize = Config::get("kmer_size");
@@ -231,6 +313,23 @@ int assemble_main(int argc, char** argv)
 	Parameters::get().minimumOverlap = minOverlap;
 	Parameters::get().unevenCoverage = unevenCov;
 	Parameters::get().shortSequences = shortMode;
+	const float medianRate = Config::get("short_repeat_median_rate");
+	const float targetCoverage = Config::get("short_downsample_coverage");
+	const float maxCandidates = Config::get("short_max_candidates_per_side");
+	if (!std::isfinite(medianRate) || medianRate < 0 ||
+		(medianRate > 0 && medianRate < 1) || medianRate > 1000000 ||
+		!std::isfinite(targetCoverage) || targetCoverage < 0 || targetCoverage > 1000000 ||
+		!std::isfinite(maxCandidates) || maxCandidates < 0 || maxCandidates > 1000000 ||
+		std::floor(maxCandidates) != maxCandidates)
+	{
+		Logger::get().error() << "Invalid short-read performance parameters";
+		return 1;
+	}
+	if (!shortMode && (medianRate || targetCoverage || maxCandidates))
+	{
+		Logger::get().error() << "Short-read performance parameters require --short";
+		return 1;
+	}
 	Logger::get().debug() << "Running with k-mer size: " << 
 		Parameters::get().kmerSize; 
 	Logger::get().debug() << "Running with minimum overlap " << minOverlap;
@@ -240,7 +339,7 @@ int assemble_main(int argc, char** argv)
 	//TODO: unify minimumOverlap ad safeOverlap concepts
 	if (!shortMode) Parameters::get().minimumOverlap = 1000;
 
-	SequenceContainer readsContainer;
+	std::unique_ptr<SequenceContainer> readsOwner(new SequenceContainer);
 	std::vector<std::string> readsList = splitString(readsFasta, ',');
 	Logger::get().info() << "Reading sequences";
 	try
@@ -250,7 +349,7 @@ int assemble_main(int argc, char** argv)
 		minReadLength = std::max(minReadLength, minOverlap);
 		for (auto& readsFile : readsList)
 		{
-			readsContainer.loadFromFile(readsFile, minReadLength);
+			readsOwner->loadFromFile(readsFile, minReadLength);
 		}
 	}
 	catch (SequenceContainer::ParseException& e)
@@ -258,7 +357,13 @@ int assemble_main(int argc, char** argv)
 		Logger::get().error() << e.what();
 		return 1;
 	}
-	readsContainer.buildPositionIndex();
+	readsOwner->buildPositionIndex();
+	if (targetCoverage > 0)
+	{
+		auto sampled = downsampleShortReads(*readsOwner, targetCoverage);
+		if (sampled) readsOwner = std::move(sampled);
+	}
+	SequenceContainer& readsContainer = *readsOwner;
 	VertexIndex vertexIndex(readsContainer);
 	vertexIndex.outputProgress(true);
 
@@ -279,13 +384,13 @@ int assemble_main(int argc, char** argv)
 	if (useMinimizers)
 	{
 		const int minWnd = Config::get("minimizer_window");
-		vertexIndex.buildIndexMinimizers(/*min freq*/ 1, minWnd);
+		vertexIndex.buildIndexMinimizers(/*min freq*/ 1, minWnd, medianRate);
 	}
 	else	//indexing using solid k-mers
 	{
 		vertexIndex.countKmers();
 		vertexIndex.buildIndexUnevenCoverage(MIN_FREQ, SELECT_RATE, 
-											 TANDEM_FREQ);
+											 TANDEM_FREQ, medianRate);
 	}
 
 	Logger::get().debug() << "Peak RAM usage: " 
@@ -301,7 +406,8 @@ int assemble_main(int argc, char** argv)
 						 /*no div threshold*/ 1.0f,
 						 (bool)Config::get("reads_base_alignment"),
 						 /*partition bad map*/ false,
-						 (bool)Config::get("hpc_scoring_on"));
+						 (bool)Config::get("hpc_scoring_on"),
+						 (size_t)maxCandidates);
 	OverlapContainer readOverlaps(ovlp, readsContainer);
 	readOverlaps.estimateOverlaperParameters();
 	readOverlaps.setDivergenceThreshold((float)Config::get("assemble_ovlp_divergence"),
@@ -309,6 +415,7 @@ int assemble_main(int argc, char** argv)
 
 	Extender extender(readsContainer, readOverlaps, minOverlap);
 	extender.assembleDisjointigs();
+	ovlp.logCandidateStats();
 	vertexIndex.clear();
 
 	// Short reads may not contain 500 bases between successive overlap switches.

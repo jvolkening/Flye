@@ -23,7 +23,7 @@ void VertexIndex::countKmers()
 
 
 void VertexIndex::buildIndexUnevenCoverage(int globalMinFreq, float selectRate,
-										   int tandemFreq)
+										   int tandemFreq, float medianRate)
 {
 	//this->setRepeatCutoff(globalMinFreq);
 
@@ -58,24 +58,26 @@ void VertexIndex::buildIndexUnevenCoverage(int globalMinFreq, float selectRate,
 	processInParallel(allReads, initializeIndex, 
 					  Parameters::get().numThreads, _outputProgress);
 	
-	this->filterFrequentKmers(globalMinFreq, (float)Config::get("repeat_kmer_rate"));
+	this->filterFrequentKmers(globalMinFreq, (float)Config::get("repeat_kmer_rate"),
+							  medianRate);
 	this->allocateIndexMemory();
 
 	if (_outputProgress) Logger::get().info() << "Filling index table (2/2)";
 	std::function<void(const FastaRecord::Id&)> indexUpdate = 
-	[this, globalMinFreq, selectRate, tandemFreq] (const FastaRecord::Id& readId)
+	[this, globalMinFreq, selectRate, tandemFreq, medianRate] (const FastaRecord::Id& readId)
 	{
 		if (!readId.strand()) return;
 
 		auto topKmers = this->yieldFrequentKmers(readId, selectRate, tandemFreq);
 		for (auto kmerFreq : topKmers)
 		{
-			if (kmerFreq.freq < (size_t)globalMinFreq ||
-				kmerFreq.freq > _repetitiveFrequency) continue;
+			if (kmerFreq.freq < (size_t)globalMinFreq) continue;
+			if (medianRate == 0 && kmerFreq.freq > _repetitiveFrequency) continue;
 
 			KmerPosition kmerPos(kmerFreq.kmer, kmerFreq.position);
 			FastaRecord::Id targetRead = readId;
 			bool revCmp = kmerPos.kmer.standardForm();
+			if (medianRate > 0 && _repetitiveKmers.contains(kmerPos.kmer)) continue;
 			if (revCmp)
 			{
 				kmerPos.position = _seqContainer.seqLen(readId) - 
@@ -136,10 +138,11 @@ namespace
 
 }
 
-void VertexIndex::filterFrequentKmers(int minCoverage, float rate)
+void VertexIndex::filterFrequentKmers(int minCoverage, float rate, float medianRate)
 {
 	size_t totalKmers = 0;
 	size_t uniqueKmers = 0;
+	std::map<size_t, size_t> solidHistogram;
 	for (const auto& kmer : _kmerIndex.lock_table())
 	{
 		if (kmer.second.capacity >= (size_t)minCoverage)
@@ -147,9 +150,34 @@ void VertexIndex::filterFrequentKmers(int minCoverage, float rate)
 			totalKmers += kmer.second.capacity;
 			uniqueKmers += 1;
 		}
+		if (medianRate > 0 && kmer.second.capacity >= (size_t)std::max(2, minCoverage))
+			++solidHistogram[kmer.second.capacity];
 	}
 	float meanFrequency = (float)totalKmers / (uniqueKmers + 1);
 	_repetitiveFrequency = rate * meanFrequency;
+	if (!solidHistogram.empty())
+	{
+		size_t count = 0;
+		for (const auto& bin : solidHistogram) count += bin.second;
+		size_t seen = 0;
+		for (const auto& bin : solidHistogram)
+		{
+			seen += bin.second;
+			if (seen >= (count + 1) / 2)
+			{
+				_repetitiveFrequency = std::min(_repetitiveFrequency,
+					(size_t)(medianRate * bin.first));
+				Logger::get().info() << "Solid indexed k-mer median frequency: "
+									 << bin.first << "; repeat cutoff: "
+									 << _repetitiveFrequency;
+				break;
+			}
+		}
+	}
+	else if (medianRate > 0)
+	{
+		Logger::get().warning() << "No solid indexed k-mers for median repeat cutoff; using mean cutoff";
+	}
 	
 	size_t repetitiveKmers = 0;
 	for (const auto& kmer : _kmerIndex.lock_table())
@@ -167,7 +195,7 @@ void VertexIndex::filterFrequentKmers(int minCoverage, float rate)
 		_kmerIndex.erase(kmer.first);
 	}
 
-	float filteredRate = (float)repetitiveKmers / totalKmers;
+	float filteredRate = totalKmers ? (float)repetitiveKmers / totalKmers : 0;
 	Logger::get().debug() << "Mean k-mer frequency: " 
 						  << meanFrequency;
 	Logger::get().debug() << "Repetitive k-mer frequency: " 
@@ -297,7 +325,7 @@ void VertexIndex::allocateIndexMemory()
 	//	<< " wasted space: " << wasted;
 }
 
-void VertexIndex::buildIndexMinimizers(int minCoverage, int wndLen)
+void VertexIndex::buildIndexMinimizers(int minCoverage, int wndLen, float medianRate)
 {
 	if (_outputProgress) Logger::get().info() << "Building minimizer index";
 
@@ -329,7 +357,8 @@ void VertexIndex::buildIndexMinimizers(int minCoverage, int wndLen)
 	processInParallel(allReads, initializeIndex, 
 					  Parameters::get().numThreads, _outputProgress);
 
-	this->filterFrequentKmers(minCoverage, (float)Config::get("repeat_kmer_rate"));
+	this->filterFrequentKmers(minCoverage, (float)Config::get("repeat_kmer_rate"),
+							  medianRate);
 	this->allocateIndexMemory();
 	
 	if (_outputProgress) Logger::get().info() << "Filling index";
